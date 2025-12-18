@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <ctime>
+#include <cmath>
 
 #include <openglErrorReporting.h>
 
@@ -196,6 +197,10 @@ int main(void)
 
 	// Spawn X range (keep inside)
 	constexpr float SPAWN_X_LIMIT = 0.9f;
+
+	constexpr float SPIKE_HALF_X = 0.07f;
+	constexpr float SPIKE_HALF_Y = 0.08f;
+
 #pragma endregion
 
 #pragma region Create Meshes
@@ -258,6 +263,8 @@ int main(void)
 
 	std::vector<Obstacle> obstacles;
 	double spawnAcc = 0.0;
+
+	bool gameOver = false;
 #pragma endregion
 
 #pragma region Main Loop
@@ -302,6 +309,28 @@ int main(void)
 		for (auto& o : obstacles)
 			o.y -= o.speed * dt;
 
+		// --- collision (AABB vs AABB) ---
+		if (!gameOver)
+		{
+			const float px = playerX;
+			const float py = PLAYER_Y;
+
+			for (const auto& o : obstacles)
+			{
+				const float sx = o.x;
+				const float sy = o.y;
+
+				bool overlapX = std::fabs(px - sx) < (PLAYER_HALF + SPIKE_HALF_X);
+				bool overlapY = std::fabs(py - sy) < (PLAYER_HALF + SPIKE_HALF_Y);
+
+				if (overlapX && overlapY)
+				{
+					gameOver = true;
+					break;
+				}
+			}
+		}
+
 		// remove off-screen
 		obstacles.erase(
 			std::remove_if(obstacles.begin(), obstacles.end(),
@@ -319,6 +348,16 @@ int main(void)
 		glUniform3f(locColor, 0.0f, 1.0f, 0.0f);
 		glUniform2f(locOffset, playerX, PLAYER_Y);
 		glDrawArrays(GL_TRIANGLES, 0, playerMesh.vertexCount);
+
+		// draw player
+		glBindVertexArray(playerMesh.vao);
+
+		if (!gameOver) glUniform3f(locColor, 0.0f, 1.0f, 0.0f);
+		else           glUniform3f(locColor, 1.0f, 1.0f, 0.0f); // game over 
+
+		glUniform2f(locOffset, playerX, PLAYER_Y);
+		glDrawArrays(GL_TRIANGLES, 0, playerMesh.vertexCount);
+
 
 		// draw spikes (red)
 		glBindVertexArray(spikeMesh.vao);
