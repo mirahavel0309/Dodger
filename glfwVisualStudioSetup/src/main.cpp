@@ -10,6 +10,34 @@
 #include "backends/imgui_impl_opengl3.h"
 #include "imguiThemes.h"
 
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
+#include <algorithm>
+#include <cstdlib>
+#include <ctime>
+
+struct Obstacle { float x, y, speed; };
+std::vector<Obstacle> obstacles;
+double spawnAcc = 0.0;
+
+
+static std::string LoadTextFile(const char* path)
+{
+	std::ifstream file(path);
+	if (!file.is_open())
+	{
+		std::cerr << "Failed to open file: " << path << "\n";
+		return {};
+	}
+
+	std::stringstream ss;
+	ss << file.rdbuf();
+	return ss.str();
+}
+
+
 static void error_callback(int error, const char *description)
 {
 	std::cout << "Error: " << description << "\n";
@@ -68,7 +96,7 @@ static GLuint createProgram(const char* vsSrc, const char* fsSrc)
 
 int main(void)
 {
-
+	srand((unsigned)time(nullptr));
 	glfwSetErrorCallback(error_callback);
 
 	if (!glfwInit())
@@ -94,42 +122,63 @@ int main(void)
 		exit(EXIT_FAILURE);
 	}
 
-	float vertices[] = {
-		0.0f,  0.5f,  // Vertex 1 (X, Y)
-		0.5f, -0.5f,  // Vertex 2 (X, Y)
-	   -0.5f, -0.5f   // Vertex 3 (X, Y)
+	float playerVerts[] = {
+		// 1st tri
+		-0.08f, -0.08f,
+		 0.08f, -0.08f,
+		 0.08f,  0.08f,
+		 // 2nd tri
+		 -0.08f, -0.08f,
+		  0.08f,  0.08f,
+		 -0.08f,  0.08f
 	};
 
-	GLuint vao, vbo;
-	glGenVertexArrays(1, &vao);
-	glGenBuffers(1, &vbo);
+	GLuint playerVAO = 0, playerVBO = 0;
+	glGenVertexArrays(1, &playerVAO);
+	glGenBuffers(1, &playerVBO);
 
-	glBindVertexArray(vao);
-	glBindBuffer(GL_ARRAY_BUFFER, vbo);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+	glBindVertexArray(playerVAO);
+	glBindBuffer(GL_ARRAY_BUFFER, playerVBO);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(playerVerts), playerVerts, GL_STATIC_DRAW);
 	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
 	glEnableVertexAttribArray(0);
-
 	glBindVertexArray(0);
 
-	const char* vsSrc = R"(
-#version 330 core
-layout(location=0) in vec2 aPos;
-uniform vec2 uOffset;
-void main() {
-    gl_Position = vec4(aPos + uOffset, 0.0, 1.0);
-}
-)";
 
-	const char* fsSrc = R"(
-#version 330 core
-out vec4 FragColor;
-void main() {
-    FragColor = vec4(1,0,0,1);
-}
-)";
+	float spikeVerts[] = {
+		 0.0f,  -0.08f,   // tip (¾Æ·¡)
+		 0.07f,  0.08f,   // right top
+		-0.07f,  0.08f    // left top
+	};
 
-	GLuint program = createProgram(vsSrc, fsSrc);
+	GLuint spikeVAO = 0, spikeVBO = 0;
+	glGenVertexArrays(1, &spikeVAO);
+	glGenBuffers(1, &spikeVBO);
+
+	glBindVertexArray(spikeVAO);
+	glBindBuffer(GL_ARRAY_BUFFER, spikeVBO);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(spikeVerts), spikeVerts, GL_STATIC_DRAW);
+	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+	glEnableVertexAttribArray(0);
+	glBindVertexArray(0);
+
+
+	std::string vertSrc = LoadTextFile("resources/basic.vert");
+	std::string fragSrc = LoadTextFile("resources/basic.frag");
+
+	if (vertSrc.empty() || fragSrc.empty())
+	{
+		std::cerr << "Shader source empty\n";
+		return EXIT_FAILURE;
+	}
+
+	GLuint program = createProgram(
+		vertSrc.c_str(),
+		fragSrc.c_str()
+	);
+
+	GLint locColor = glGetUniformLocation(program, "uColor");
+
 	if (!program) {
 		std::cerr << "Failed to create shader program\n";
 		return EXIT_FAILURE;
@@ -142,10 +191,16 @@ void main() {
 
 	double last = glfwGetTime();
 
+	const float playerHalf = 0.06f;
+	const float playerY = -1.0f + playerHalf + 0.02f; 
+
 	enableReportGlErrors();
 	
+	glClearColor(0.05f, 0.05f, 0.05f, 1.0f);
+
 	while (!glfwWindowShouldClose(window))
 	{
+		// --- viewport / dt ---
 		int width = 0, height = 0;
 		glfwGetFramebufferSize(window, &width, &height);
 		glViewport(0, 0, width, height);
@@ -154,34 +209,58 @@ void main() {
 		float dt = (float)(now - last);
 		last = now;
 
+		// --- input (x only) ---
 		float dx = 0.0f;
-
 		if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS ||
 			glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS)
-		{
 			dx -= 1.0f;
-		}
 
 		if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS ||
 			glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS)
-		{
 			dx += 1.0f;
-		}
 
 		posX += dx * speed * dt;
-		
+
 		// map bounds
 		if (posX > 0.9f)  posX = 0.9f;
 		if (posX < -0.9f) posX = -0.9f;
 
+		// --- spawn / update obstacles ---
+		const float spawnInterval = 1.2f;
+		spawnAcc += dt;
+		if (spawnAcc >= spawnInterval)
+		{
+			spawnAcc = 0.0;
+			float rx = ((rand() % 2001) / 1000.0f - 1.0f) * 0.9f; // -0.9~0.9
+			obstacles.push_back({ rx, 1.2f, 0.45f });
+		}
 
+		for (auto& o : obstacles) o.y -= o.speed * dt;
+
+		obstacles.erase(
+			std::remove_if(obstacles.begin(), obstacles.end(),
+				[](const Obstacle& o) { return o.y < -1.2f; }),
+			obstacles.end()
+		);
+
+		// --- render ---
 		glClear(GL_COLOR_BUFFER_BIT);
-
 		glUseProgram(program);
-		glUniform2f(locOffset, posX, posY);
 
-		glBindVertexArray(vao);
-		glDrawArrays(GL_TRIANGLES, 0, 3);
+		// player (green square)
+		glBindVertexArray(playerVAO);
+		glUniform3f(locColor, 0.0f, 1.0f, 0.0f);
+		glUniform2f(locOffset, posX, playerY);
+		glDrawArrays(GL_TRIANGLES, 0, 6); 
+
+		// spikes (red inverted triangles)
+		glBindVertexArray(spikeVAO);
+		glUniform3f(locColor, 1.0f, 0.0f, 0.0f);
+		for (const auto& o : obstacles) {
+			glUniform2f(locOffset, o.x, o.y);
+			glDrawArrays(GL_TRIANGLES, 0, 3);
+		}
+
 
 		glfwSwapBuffers(window);
 		glfwPollEvents();
@@ -194,4 +273,3 @@ void main() {
 
 	return 0;
 }
-
