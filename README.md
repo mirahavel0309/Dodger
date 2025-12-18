@@ -1,3 +1,3 @@
 # Dodger
 
-my first openGL game
+my first openGL game!!
