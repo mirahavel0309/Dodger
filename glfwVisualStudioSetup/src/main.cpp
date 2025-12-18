@@ -177,6 +177,16 @@ int main(void)
 	glClearColor(0.05f, 0.05f, 0.05f, 1.0f);
 #pragma endregion
 
+// -------------------------------------------------
+// ImGui init
+// -------------------------------------------------
+	IMGUI_CHECKVERSION();
+	ImGui::CreateContext();
+	ImGui::StyleColorsDark();
+	ImGui_ImplGlfw_InitForOpenGL(window, true);
+	ImGui_ImplOpenGL3_Init("#version 330");
+
+
 #pragma region Constants
 	// Player is a square in NDC coordinates.
 	// If PLAYER_HALF=0.08 => size is 0.16 x 0.16
@@ -265,63 +275,96 @@ int main(void)
 	double spawnAcc = 0.0;
 
 	bool gameOver = false;
+
+	float score = 0.0f;
+	float bestScore = 0.0f;
+
+	float spawnInterval = SPAWN_INTERVAL;
+	float spikeSpeed = SPIKE_SPEED;
+	float difficultyT = 0.0f;
+
 #pragma endregion
 
 #pragma region Main Loop
 	while (!glfwWindowShouldClose(window))
 	{
-		// --- viewport ---
+		// -------------------------------------------------
+		// viewport
+		// -------------------------------------------------
 		int width = 0, height = 0;
 		glfwGetFramebufferSize(window, &width, &height);
 		glViewport(0, 0, width, height);
 
-		// --- dt ---
+		// -------------------------------------------------
+		// delta time
+		// -------------------------------------------------
 		double now = glfwGetTime();
 		float dt = (float)(now - last);
 		last = now;
 
-		// --- input (x only) ---
-		float dx = 0.0f;
-		if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS ||
-			glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS) dx -= 1.0f;
-
-		if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS ||
-			glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS) dx += 1.0f;
-
-		playerX += dx * PLAYER_SPEED * dt;
-
-		// clamp so the square never clips off-screen
-		if (playerX > PLAYER_X_LIMIT) playerX = PLAYER_X_LIMIT;
-		if (playerX < -PLAYER_X_LIMIT) playerX = -PLAYER_X_LIMIT;
-
-		// --- spawn obstacles ---
-		spawnAcc += dt;
-		if (spawnAcc >= SPAWN_INTERVAL)
+		// -------------------------------------------------
+		// restart (game over)
+		// -------------------------------------------------
+		if (gameOver)
 		{
-			spawnAcc = 0.0;
+			if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS)
+			{
+				gameOver = false;
+				playerX = 0.0f;
+				obstacles.clear();
+				spawnAcc = 0.0;
+				last = glfwGetTime();
 
-			// random x in [-SPAWN_X_LIMIT, +SPAWN_X_LIMIT]
-			float rx = ((rand() % 2001) / 1000.0f - 1.0f) * SPAWN_X_LIMIT;
-			obstacles.push_back({ rx, SPAWN_Y, SPIKE_SPEED });
+				score = 0.0f;
+				spawnInterval = SPAWN_INTERVAL;
+				spikeSpeed = SPIKE_SPEED;
+				difficultyT = 0.0f;
+			}
 		}
 
-		// --- update obstacles ---
-		for (auto& o : obstacles)
-			o.y -= o.speed * dt;
-
-		// --- collision (AABB vs AABB) ---
+		// -------------------------------------------------
+		// game logic (only if not game over)
+		// -------------------------------------------------
 		if (!gameOver)
 		{
+			// ---------- input (x only) ----------
+			float dx = 0.0f;
+
+			if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS ||
+				glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS)
+				dx -= 1.0f;
+
+			if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS ||
+				glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS)
+				dx += 1.0f;
+
+			playerX += dx * PLAYER_SPEED * dt;
+
+			// clamp player inside screen
+			if (playerX > PLAYER_X_LIMIT) playerX = PLAYER_X_LIMIT;
+			if (playerX < -PLAYER_X_LIMIT) playerX = -PLAYER_X_LIMIT;
+
+			// ---------- spawn obstacles ----------
+			spawnAcc += dt;
+			if (spawnAcc >= spawnInterval)
+			{
+				spawnAcc = 0.0;
+				float rx = ((rand() % 2001) / 1000.0f - 1.0f) * SPAWN_X_LIMIT;
+				obstacles.push_back({ rx, SPAWN_Y, spikeSpeed });
+			}
+
+			// ---------- update obstacles ----------
+			for (auto& o : obstacles)
+				o.y -= o.speed * dt;
+
+			// ---------- collision (AABB) ----------
 			const float px = playerX;
 			const float py = PLAYER_Y;
 
 			for (const auto& o : obstacles)
 			{
-				const float sx = o.x;
-				const float sy = o.y;
-
-				bool overlapX = std::fabs(px - sx) < (PLAYER_HALF + SPIKE_HALF_X);
-				bool overlapY = std::fabs(py - sy) < (PLAYER_HALF + SPIKE_HALF_Y);
+				bool overlapX = std::fabs(px - o.x) < (PLAYER_HALF + SPIKE_HALF_X);
+				bool overlapY = std::fabs(py - o.y) < (PLAYER_HALF + SPIKE_HALF_Y);
 
 				if (overlapX && overlapY)
 				{
@@ -329,37 +372,43 @@ int main(void)
 					break;
 				}
 			}
+
+			score += dt;
+			if (score > bestScore) bestScore = score;
+
+			difficultyT += dt;
+			if (difficultyT >= 5.0f)
+			{
+				difficultyT = 0.0f;
+
+				spawnInterval = std::max(0.35f, spawnInterval - 0.08f);
+
+				spikeSpeed += 0.05f;
+			}
+
+
+			// ---------- remove off-screen obstacles ----------
+			obstacles.erase(
+				std::remove_if(obstacles.begin(), obstacles.end(),
+					[](const Obstacle& o) { return o.y < DESPAWN_Y; }),
+				obstacles.end()
+			);
 		}
 
-		// remove off-screen
-		obstacles.erase(
-			std::remove_if(obstacles.begin(), obstacles.end(),
-				[](const Obstacle& o) { return o.y < DESPAWN_Y; }),
-			obstacles.end()
-		);
-
-		// --- render ---
+		// -------------------------------------------------
+		// render
+		// -------------------------------------------------
 		glClear(GL_COLOR_BUFFER_BIT);
-
 		glUseProgram(program);
 
-		// draw player (green)
+		// player (green / yellow if game over)
 		glBindVertexArray(playerMesh.vao);
-		glUniform3f(locColor, 0.0f, 1.0f, 0.0f);
-		glUniform2f(locOffset, playerX, PLAYER_Y);
-		glDrawArrays(GL_TRIANGLES, 0, playerMesh.vertexCount);
-
-		// draw player
-		glBindVertexArray(playerMesh.vao);
-
 		if (!gameOver) glUniform3f(locColor, 0.0f, 1.0f, 0.0f);
-		else           glUniform3f(locColor, 1.0f, 1.0f, 0.0f); // game over 
-
+		else           glUniform3f(locColor, 1.0f, 1.0f, 0.0f);
 		glUniform2f(locOffset, playerX, PLAYER_Y);
 		glDrawArrays(GL_TRIANGLES, 0, playerMesh.vertexCount);
 
-
-		// draw spikes (red)
+		// spikes (red)
 		glBindVertexArray(spikeMesh.vao);
 		glUniform3f(locColor, 1.0f, 0.0f, 0.0f);
 		for (const auto& o : obstacles)
@@ -368,10 +417,61 @@ int main(void)
 			glDrawArrays(GL_TRIANGLES, 0, spikeMesh.vertexCount);
 		}
 
+		// -------------------------------------------------
+// ImGui frame
+// -------------------------------------------------
+		ImGui_ImplOpenGL3_NewFrame();
+		ImGui_ImplGlfw_NewFrame();
+		ImGui::NewFrame();
+
+		// HUD (좌상단)
+		{
+			ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
+			ImGui::SetNextWindowBgAlpha(0.35f);
+			ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
+				ImGuiWindowFlags_AlwaysAutoResize |
+				ImGuiWindowFlags_NoMove |
+				ImGuiWindowFlags_NoSavedSettings;
+			ImGui::Begin("HUD", nullptr, flags);
+			ImGui::Text("Score: %.1f", score);
+			ImGui::Text("Best : %.1f", bestScore);
+			ImGui::Text("Spawn: %.2fs", spawnInterval);
+			ImGui::Text("Speed: %.2f", spikeSpeed);
+			ImGui::End();
+		}
+
+		// GAME OVER (가운데 크게)
+		if (gameOver)
+		{
+			ImGuiViewport* vp = ImGui::GetMainViewport();
+			ImVec2 center = vp->GetCenter();
+
+			ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+			ImGui::SetNextWindowBgAlpha(0.0f);
+
+			ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
+				ImGuiWindowFlags_AlwaysAutoResize |
+				ImGuiWindowFlags_NoMove |
+				ImGuiWindowFlags_NoSavedSettings;
+
+			ImGui::Begin("GAMEOVER", nullptr, flags);
+			ImGui::SetWindowFontScale(3.0f);
+			ImGui::Text("GAME OVER");
+			ImGui::SetWindowFontScale(1.2f);
+			ImGui::Text("Score: %.1f   Best: %.1f", score, bestScore);
+			ImGui::Text("Press R to Restart");
+			ImGui::End();
+		}
+
+		ImGui::Render();
+		ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+
 		glfwSwapBuffers(window);
 		glfwPollEvents();
 	}
 #pragma endregion
+
 
 #pragma region Shutdown
 	glDeleteProgram(program);
@@ -381,6 +481,11 @@ int main(void)
 
 	glfwDestroyWindow(window);
 	glfwTerminate();
+
+	ImGui_ImplOpenGL3_Shutdown();
+	ImGui_ImplGlfw_Shutdown();
+	ImGui::DestroyContext();
+
 #pragma endregion
 
 	return 0;
